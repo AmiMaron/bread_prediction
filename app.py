@@ -17,7 +17,8 @@ st.set_page_config(
 def load_model():
     """Load the trained Prophet model"""
     try:
-        model_path = os.path.join('model', 'model.pkl')
+        # Change the model path to match your GitHub structure
+        model_path = os.path.join('model', 'prophet_model.pkl')
         with open(model_path, 'rb') as f:
             model = pickle.load(f)
         return model
@@ -35,48 +36,40 @@ def create_future_df(date, temperature, precipitation):
     
     # Add day dummies
     day_name = date.strftime('%A').lower()
-    for day in ['friday', 'monday', 'saturday', 'sunday', 'thursday', 'tuesday', 'wednesday']:
+    day_columns = ['friday', 'monday', 'saturday', 'sunday', 'thursday', 'tuesday', 'wednesday']
+    for day in day_columns:
         future[f'day_{day}'] = 1 if day == day_name else 0
     
     return future
 
-def display_prediction_metrics(forecast):
-    """Display the prediction metrics in columns"""
-    col1, col2, col3 = st.columns(3)
+def plot_prediction(forecast):
+    """Create a plotly figure for the prediction"""
+    fig = go.Figure()
     
-    with col1:
-        st.metric(
-            label="Predicted Bread Loaves",
-            value=f"{int(forecast['yhat'].iloc[0])}",
-            delta=None
-        )
+    fig.add_trace(go.Scatter(
+        x=[forecast['ds'].iloc[0]],
+        y=[forecast['yhat'].iloc[0]],
+        mode='markers',
+        name='Prediction',
+        marker=dict(size=12, color='blue')
+    ))
     
-    with col2:
-        st.metric(
-            label="Lower Bound",
-            value=f"{int(forecast['yhat_lower'].iloc[0])}",
-            delta=None
-        )
-        
-    with col3:
-        st.metric(
-            label="Upper Bound",
-            value=f"{int(forecast['yhat_upper'].iloc[0])}",
-            delta=None
-        )
-
-def display_weather_info(date, temperature, precipitation, forecast):
-    """Display weather and prediction information"""
-    info_col1, info_col2 = st.columns(2)
+    fig.add_trace(go.Scatter(
+        x=[forecast['ds'].iloc[0], forecast['ds'].iloc[0]],
+        y=[forecast['yhat_lower'].iloc[0], forecast['yhat_upper'].iloc[0]],
+        mode='lines',
+        name='Confidence Interval',
+        line=dict(color='rgba(0,0,255,0.2)', width=2)
+    ))
     
-    with info_col1:
-        st.info(f"Date: {date.strftime('%A, %B %d, %Y')}")
-        st.info(f"Temperature: {temperature}°C")
-        
-    with info_col2:
-        st.info(f"Precipitation: {precipitation}mm")
-        confidence_range = f"±{int((forecast['yhat_upper'].iloc[0] - forecast['yhat_lower'].iloc[0])/2)} loaves"
-        st.info(f"Confidence Range: {confidence_range}")
+    fig.update_layout(
+        title='Bread Sales Prediction',
+        xaxis_title='Date',
+        yaxis_title='Number of Loaves',
+        showlegend=True
+    )
+    
+    return fig
 
 def main():
     st.title("🥖 Bread Sales Predictor")
@@ -119,11 +112,29 @@ def main():
             
             # Display results
             st.header("Prediction Results")
-            display_prediction_metrics(forecast)
+            
+            # Display metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Predicted Bread Loaves", f"{int(forecast['yhat'].iloc[0])}")
+            with col2:
+                st.metric("Lower Bound", f"{int(forecast['yhat_lower'].iloc[0])}")
+            with col3:
+                st.metric("Upper Bound", f"{int(forecast['yhat_upper'].iloc[0])}")
+            
+            # Plot the prediction
+            st.plotly_chart(plot_prediction(forecast), use_container_width=True)
             
             # Display weather info
             st.subheader("Prediction Details")
-            display_weather_info(date, temperature, precipitation, forecast)
+            info_col1, info_col2 = st.columns(2)
+            with info_col1:
+                st.info(f"Date: {date.strftime('%A, %B %d, %Y')}")
+                st.info(f"Temperature: {temperature}°C")
+            with info_col2:
+                st.info(f"Precipitation: {precipitation}mm")
+                confidence_range = f"±{int((forecast['yhat_upper'].iloc[0] - forecast['yhat_lower'].iloc[0])/2)} loaves"
+                st.info(f"Confidence Range: {confidence_range}")
             
             # Historical context
             with st.expander("See Historical Context"):
