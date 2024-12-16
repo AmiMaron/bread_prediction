@@ -8,6 +8,7 @@ import os
 import requests
 from typing import Optional, Tuple, Dict
 
+
 class ModelLoader:
     @staticmethod
     @st.cache_resource
@@ -208,3 +209,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
