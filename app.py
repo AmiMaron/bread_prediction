@@ -7,6 +7,7 @@ import pickle
 import os
 import requests
 from typing import Optional, Tuple, Dict
+from data.holiday_impact_generation import get_score_for_date
 
 
 class ModelLoader:
@@ -54,7 +55,7 @@ class WeatherService:
                 # Get all forecasts for the target date
                 day_forecasts = [
                     x for x in forecast_data['list']
-                    if datetime.datetime.fromtimestamp(x['dt']).date() == target_date
+                    if datetime.datetime.utcfromtimestamp(x['dt']).date() == target_date
                 ]
                 
                 if day_forecasts:
@@ -63,10 +64,17 @@ class WeatherService:
                     # Sum precipitation for the day
                     total_precip = sum(x.get('rain', {}).get('3h', 0) for x in day_forecasts)
                     
+                    # Get holiday score dictionary and extract the score value
+                    holiday_info = get_score_for_date(target_date.strftime('%Y-%m-%d'))
+                    holiday_score = holiday_info['score']  # Extract just the score value
+                    holiday_label = holiday_info['holiday_label']
+                    
                     forecasts.append({
-                        'date': target_date,
+                        'date': target_date.strftime('%Y-%m-%d'),
                         'temperature': mean_temp,
-                        'precipitation': total_precip
+                        'precipitation': total_precip,
+                        'holiday_score': holiday_score,  # Use the extracted score value
+                        'holiday_label': holiday_label
                     })
                 
             return forecasts
@@ -78,11 +86,13 @@ class WeatherService:
 class PredictionManager:
     @staticmethod
     def create_future_df(forecasts: list) -> pd.DataFrame:
-        """Create a DataFrame for predictions using weather forecast data"""
+        """Create a DataFrame for predictions using weather forecast and holidays data"""
         future = pd.DataFrame([{
             'ds': pd.to_datetime(f['date']),
             'temperature_2m_mean': f['temperature'],
-            'precipitation_sum_mm': f['precipitation']
+            'precipitation_sum_mm': f['precipitation'],
+            'holiday_score': f['holiday_score'],
+            'holiday_label': f['holiday_label']
         } for f in forecasts])
         
         # Add day dummies
@@ -109,29 +119,52 @@ class PredictionManager:
 
 def main():
     st.set_page_config(
-        page_title="3-Day Bread Sales Predictor",
+        page_title="Weekly Bread Sales Predictor",
         page_icon="🥖",
-        layout="wide"
+        layout="wide",
+        initial_sidebar_state="collapsed"
     )
     
     # Initialize services
     weather_service = WeatherService(st.secrets["OPENWEATHER_API_KEY"])
     
-    st.title("🥖 3-Day Bread Sales Predictor")
+    # Custom CSS for better styling
+    st.markdown("""
+        <style>
+        .main {
+            padding: 2rem;
+        }
+        .stMetric {
+            background-color: #f0f2f6;
+            padding: 1rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .holiday-badge {
+            background-color: #ff4b4b;
+            color: white;
+            padding: 0.2rem 0.5rem;
+            border-radius: 15px;
+            font-size: 0.8rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
-    # Bakery location (could be made configurable)
+    st.title("Weekly Bread Sales Predictor")
+    
+    
+    # Bakery location
     PARIS_LAT = 48.8566
     PARIS_LON = 2.3522
     
-    # Get next 3 days
+    # Get next 7 days
     today = datetime.date.today()
-    forecast_dates = [today + datetime.timedelta(days=i) for i in range(1, 4)]
+    forecast_dates = [today + datetime.timedelta(days=i) for i in range(1, 8)]
     
     # Fetch weather forecasts
     weather_forecasts = weather_service.get_weather_forecasts(PARIS_LAT, PARIS_LON, forecast_dates)
     
     if weather_forecasts:
-        # Load model and make predictions
         model = ModelLoader.load_model()
         if model is not None:
             try:
@@ -140,19 +173,43 @@ def main():
                 metrics = PredictionManager.get_prediction_metrics(forecast)
                 
                 # Display results in a grid
-                st.header("3-Day Forecast")
+                st.markdown("## 📊 Weekly Forecast")
                 
-                cols = st.columns(3)
-                for i, (metric, weather, col) in enumerate(zip(metrics, weather_forecasts, cols)):
+                # Create two rows of columns
+                row1_cols = st.columns(5)
+                row2_cols = st.columns(3)
+                all_cols = row1_cols + row2_cols
+                
+                for i, (metric, weather, col) in enumerate(zip(metrics, weather_forecasts, all_cols)):
                     with col:
-                        st.subheader(f"Day {i+1}: {metric['day']}")
-                        st.metric("Date", metric['date'].strftime('%Y-%m-%d'))
-                        st.metric("Temperature", f"{weather['temperature']:.1f}°C")
-                        st.metric("Precipitation", f"{weather['precipitation']:.1f}mm")
-                        st.metric("Predicted Sales", f"{metric['prediction']} loaves")
-                        st.metric("Confidence Range", f"±{metric['confidence_range']} loaves")
+                        st.markdown(f"### {metric['day']}")
+                        st.markdown(f"**{metric['date'].strftime('%B %d, %Y')}**")
+                        
+                        # Weather info with icons
+                        temp_icon = "🌡️" if weather['temperature'] > 20 else "❄️"
+                        rain_icon = "🌧️" if weather['precipitation'] > 0 else "☀️"
+                        
+                        st.markdown(f"""
+                            {temp_icon} **Temperature:** {weather['temperature']:.1f}°C  
+                            {rain_icon} **Precipitation:** {weather['precipitation']:.1f}mm
+                        """)
+                        
+                        # Holiday information with styled badge
+                        if weather['holiday_label'] != 'NA':
+                            st.markdown(f"""
+                                <div class='holiday-badge'>
+                                    🎉 {weather['holiday_label']}
+                                </div>
+                            """, unsafe_allow_html=True)
+                        
+                        st.metric(
+                            "Predicted Sales",
+                            f"{metric['prediction']} loaves",
+                            delta=f"±{metric['confidence_range']}"
+                        )
                 
                 # Create visualization
+                st.markdown("## 📈 Sales Trend")
                 fig = go.Figure()
                 
                 # Add prediction points
@@ -161,7 +218,7 @@ def main():
                     y=forecast['yhat'],
                     mode='markers+lines',
                     name='Prediction',
-                    marker=dict(size=12, color='blue')
+                    marker=dict(size=12, color='#1f77b4')
                 ))
                 
                 # Add confidence intervals
@@ -170,8 +227,8 @@ def main():
                     y=forecast['yhat_upper'],
                     fill=None,
                     mode='lines',
-                    line=dict(color='rgba(0,0,255,0.2)'),
-                    name='Upper Bound'
+                    line=dict(color='rgba(31,119,180,0.2)'),
+                    name='Confidence Interval'
                 ))
                 
                 fig.add_trace(go.Scatter(
@@ -179,34 +236,24 @@ def main():
                     y=forecast['yhat_lower'],
                     fill='tonexty',
                     mode='lines',
-                    line=dict(color='rgba(0,0,255,0.2)'),
-                    name='Lower Bound'
+                    line=dict(color='rgba(31,119,180,0.2)'),
+                    showlegend=False
                 ))
                 
                 fig.update_layout(
-                    title='3-Day Bread Sales Forecast',
+                    title='Weekly Sales Forecast Trend',
                     xaxis_title='Date',
                     yaxis_title='Number of Loaves',
                     showlegend=True,
-                    height=400
+                    height=500,
+                    template='plotly_white',
+                    margin=dict(t=50, b=50, l=50, r=50)
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Production recommendations
-                st.header("Production Recommendations")
-                for metric in metrics:
-                    buffer = round(metric['confidence_range'] * 0.2)
-                    st.success(f"""
-                    📊 **{metric['day']} ({metric['date']}) Production Plan:**
-                    - Base prediction: {metric['prediction']} loaves
-                    - Recommended buffer: +{buffer} loaves
-                    - Total recommended production: {metric['prediction'] + buffer} loaves
-                    """)
                 
             except Exception as e:
                 st.error(f"Error making predictions: {str(e)}")
 
 if __name__ == "__main__":
     main()
-
